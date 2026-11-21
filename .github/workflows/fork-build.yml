@@ -1,0 +1,135 @@
+# Builds NetBird images from upstream main plus this fork's feature branches
+# and publishes them to ghcr.io.
+#
+# Nothing is written back to the repository. The runner merges
+# upstream/main with every origin/feat/* branch in a throwaway branch, so
+# upstream changes to .github/workflows never need workflow permissions and
+# this default branch stays a tiny, conflict-free `fork-ci` branch.
+name: fork build
+
+on:
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Rebuild even if this exact upstream and features combination was already built
+        type: boolean
+        default: false
+  push:
+    branches: [fork-ci]
+
+concurrency:
+  group: fork-build
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  UPSTREAM_REPO: netbirdio/netbird
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check out the fork with all branches
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Compose upstream main with the feature branches
+        id: compose
+        run: |
+          set -euo pipefail
+          git config user.name "fork-ci"
+          git config user.email "fork-ci@users.noreply.github.com"
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
+          git fetch --no-tags upstream main
+
+          up=$(git rev-parse upstream/main)
+          git checkout -q -B build "$up"
+          fingerprint_input="$up"
+          merged=""
+
+          for ref in $(git for-each-ref --format='%(refname:short)' 'refs/remotes/origin/feat/*' | sort); do
+            echo "Merging $ref"
+            if ! git merge --no-edit --no-ff "$ref"; then
+              git merge --abort || true
+              echo "::error::Conflict merging $ref into upstream/main ($up). Rebase that branch on upstream and push it again."
+              exit 1
+            fi
+            fingerprint_input="$fingerprint_input $(git rev-parse "$ref")"
+            merged="$merged $ref"
+          done
+
+          owner=$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
+          {
+            echo "fp=$(echo "$fingerprint_input" | sha256sum | cut -c1-12)"
+            echo "up7=${up:0:7}"
+            echo "date=$(date -u +%Y%m%d)"
+            echo "prefix=ghcr.io/${owner}"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "### Composed tree"
+            echo "- upstream/main: \`$up\`"
+            echo "- features:${merged:- none}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Log in to the GitHub Container Registry
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Skip when this exact combination is already published
+        id: check
+        run: |
+          if docker buildx imagetools inspect "${{ steps.compose.outputs.prefix }}/netbird-server:src-${{ steps.compose.outputs.fp }}" > /dev/null 2>&1; then
+            echo "built=true" >> "$GITHUB_OUTPUT"
+            echo "Already built for this upstream and features combination; nothing to do."
+          else
+            echo "built=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Docker Buildx
+        if: steps.check.outputs.built != 'true' || github.event.inputs.force == 'true'
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+
+      - name: Build and push the combined server image
+        if: steps.check.outputs.built != 'true' || github.event.inputs.force == 'true'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: .
+          file: combined/Dockerfile.multistage
+          platforms: linux/amd64
+          push: true
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          tags: |
+            ${{ steps.compose.outputs.prefix }}/netbird-server:latest
+            ${{ steps.compose.outputs.prefix }}/netbird-server:src-${{ steps.compose.outputs.fp }}
+            ${{ steps.compose.outputs.prefix }}/netbird-server:${{ steps.compose.outputs.date }}-up${{ steps.compose.outputs.up7 }}
+          cache-from: type=gha,scope=server
+          cache-to: type=gha,mode=max,scope=server
+
+      - name: Build and push the proxy image
+        if: steps.check.outputs.built != 'true' || github.event.inputs.force == 'true'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: .
+          file: proxy/Dockerfile.multistage
+          platforms: linux/amd64
+          push: true
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          tags: |
+            ${{ steps.compose.outputs.prefix }}/netbird-proxy:latest
+            ${{ steps.compose.outputs.prefix }}/netbird-proxy:src-${{ steps.compose.outputs.fp }}
+            ${{ steps.compose.outputs.prefix }}/netbird-proxy:${{ steps.compose.outputs.date }}-up${{ steps.compose.outputs.up7 }}
+          cache-from: type=gha,scope=proxy
+          cache-to: type=gha,mode=max,scope=proxy
