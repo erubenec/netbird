@@ -25,7 +25,7 @@ const serviceSelectColumns = `id, account_id, name, domain, enabled, auth, restr
 	meta_created_at, meta_certificate_issued_at, meta_last_renewed_at, meta_status, proxy_cluster,
 	pass_host_header, rewrite_redirects, session_private_key, session_public_key,
 	mode, listen_port, port_auto_assigned, source, source_peer, terminated,
-	private, access_groups, schedule`
+	private, access_groups, schedule, error_page`
 
 func (s *SqlStore) getServices(ctx context.Context, accountID string) ([]*rpservice.Service, error) {
 	const serviceQuery = `SELECT ` + serviceSelectColumns + ` FROM services WHERE account_id = $1`
@@ -71,6 +71,7 @@ func scanService(row pgx.CollectableRow) (*rpservice.Service, error) {
 	var restrictions []byte
 	var accessGroups []byte
 	var schedule []byte
+	var errorPage []byte
 	var createdAt, certIssuedAt, lastRenewedAt sql.NullTime
 	var status, proxyCluster, sessionPrivateKey, sessionPublicKey sql.NullString
 	var mode, source, sourcePeer sql.NullString
@@ -102,6 +103,7 @@ func scanService(row pgx.CollectableRow) (*rpservice.Service, error) {
 		&private,
 		&accessGroups,
 		&schedule,
+		&errorPage,
 	)
 	if err != nil {
 		return nil, err
@@ -128,6 +130,12 @@ func scanService(row pgx.CollectableRow) (*rpservice.Service, error) {
 	if len(schedule) > 0 {
 		if err := json.Unmarshal(schedule, &s.Schedule); err != nil {
 			return nil, fmt.Errorf("unmarshal schedule: %w", err)
+		}
+	}
+
+	if len(errorPage) > 0 {
+		if err := json.Unmarshal(errorPage, &s.ErrorPage); err != nil {
+			return nil, fmt.Errorf("unmarshal error_page: %w", err)
 		}
 	}
 

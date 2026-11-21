@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	rpservice "github.com/netbirdio/netbird/management/internals/modules/reverseproxy/service"
+	"github.com/netbirdio/netbird/shared/errorpage"
 	"github.com/netbirdio/netbird/shared/schedule"
 )
 
@@ -178,5 +179,42 @@ func TestSqlStore_GetAccount_ServiceScheduleRoundtrip(t *testing.T) {
 		}
 		assert.Equal(t, want, byID["svc-scheduled"].Schedule)
 		assert.Nil(t, byID["svc-plain"].Schedule, "a service without a schedule must stay always-on")
+	})
+}
+
+// TestSqlStore_GetAccount_ServiceErrorPageRoundtrip guards both read paths (gorm
+// and the Postgres pgx loader) against dropping the custom error page.
+func TestSqlStore_GetAccount_ServiceErrorPageRoundtrip(t *testing.T) {
+	if os.Getenv("CI") == "true" && (runtime.GOOS == "darwin" || runtime.GOOS == "windows") {
+		t.Skip("skip CI tests on darwin and windows")
+	}
+
+	runTestForAllEngines(t, "", func(t *testing.T, store Store) {
+		ctx := context.Background()
+		account := newAccountWithId(ctx, "account_error_page_svc", "testuser", "")
+		require.NoError(t, store.SaveAccount(ctx, account))
+
+		want := &errorpage.Page{HTML: "<!doctype html><h1>{{status}}</h1><p>caf\u00e9 \"quoted\" & <b>bold</b></p>"}
+		custom := &rpservice.Service{
+			ID: "svc-custom", AccountID: account.Id, Name: "custom", Domain: "custom.example",
+			ProxyCluster: "cluster.example", Enabled: true, Mode: rpservice.ModeHTTP, ErrorPage: want,
+		}
+		plain := &rpservice.Service{
+			ID: "svc-default", AccountID: account.Id, Name: "default", Domain: "default.example",
+			ProxyCluster: "cluster.example", Enabled: true, Mode: rpservice.ModeHTTP,
+		}
+		require.NoError(t, store.CreateService(ctx, custom))
+		require.NoError(t, store.CreateService(ctx, plain))
+
+		loaded, err := store.GetAccount(ctx, account.Id)
+		require.NoError(t, err)
+		require.Len(t, loaded.Services, 2)
+
+		byID := map[string]*rpservice.Service{}
+		for _, s := range loaded.Services {
+			byID[s.ID] = s
+		}
+		assert.Equal(t, want, byID["svc-custom"].ErrorPage)
+		assert.Nil(t, byID["svc-default"].ErrorPage, "a service without a page must keep the default")
 	})
 }

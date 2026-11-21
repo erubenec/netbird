@@ -5201,6 +5201,9 @@ type Service struct {
 	// Enabled Whether the service is enabled
 	Enabled bool `json:"enabled"`
 
+	// ErrorPage Replaces the proxy's built-in error page for an HTTP service. It is served with a strict Content-Security-Policy, so scripts do not run. Omit to keep the default page.
+	ErrorPage *ServiceErrorPage `json:"error_page,omitempty"`
+
 	// Id Service ID
 	Id string `json:"id"`
 
@@ -5251,6 +5254,12 @@ type ServiceAuthConfig struct {
 	PinAuth      *PINAuthConfig      `json:"pin_auth,omitempty"`
 }
 
+// ServiceErrorPage Replaces the proxy's built-in error page for an HTTP service. It is served with a strict Content-Security-Policy, so scripts do not run. Omit to keep the default page.
+type ServiceErrorPage struct {
+	// Html A complete HTML document. The placeholders {{status}}, {{title}}, {{message}} and {{request_id}} are replaced with HTML-escaped values.
+	Html string `json:"html"`
+}
+
 // ServiceMeta defines model for ServiceMeta.
 type ServiceMeta struct {
 	// CertificateIssuedAt Timestamp when the certificate was issued (empty if not yet issued)
@@ -5280,6 +5289,9 @@ type ServiceRequest struct {
 
 	// Enabled Whether the service is enabled
 	Enabled bool `json:"enabled"`
+
+	// ErrorPage Replaces the proxy's built-in error page for an HTTP service. It is served with a strict Content-Security-Policy, so scripts do not run. Omit to keep the default page.
+	ErrorPage *ServiceErrorPage `json:"error_page,omitempty"`
 
 	// ListenPort Port the proxy listens on (L4/TLS only). Set to 0 for auto-assignment.
 	ListenPort *int `json:"listen_port,omitempty"`

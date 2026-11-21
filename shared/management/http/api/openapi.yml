@@ -2948,6 +2948,8 @@ components:
           $ref: '#/components/schemas/AccessRestrictions'
         schedule:
           $ref: '#/components/schemas/ServiceSchedule'
+        error_page:
+          $ref: '#/components/schemas/ServiceErrorPage'
         meta:
           $ref: '#/components/schemas/ServiceMeta'
         private:
@@ -3043,6 +3045,8 @@ components:
           $ref: '#/components/schemas/AccessRestrictions'
         schedule:
           $ref: '#/components/schemas/ServiceSchedule'
+        error_page:
+          $ref: '#/components/schemas/ServiceErrorPage'
         private:
           type: boolean
           description: When true, the service is NetBird-only — its target points at a proxy cluster, inbound peers authenticate via their WireGuard tunnel identity (no OIDC), and an ACL policy is auto-generated from access_groups to the cluster's proxy-peer group. Requires mode=http.
@@ -3276,6 +3280,17 @@ components:
           example: "2026-12-31"
       required:
         - timezone
+    ServiceErrorPage:
+      type: object
+      description: Replaces the proxy's built-in error page for an HTTP service. It is served with a strict Content-Security-Policy, so scripts do not run. Omit to keep the default page.
+      properties:
+        html:
+          type: string
+          maxLength: 65536
+          description: A complete HTML document. The placeholders {{status}}, {{title}}, {{message}} and {{request_id}} are replaced with HTML-escaped values.
+          example: "<!doctype html><title>{{title}}</title><h1>{{status}}</h1><p>{{message}}</p>"
+      required:
+        - html
     PasswordAuthConfig:
       type: object
       properties:

@@ -24,6 +24,7 @@ import (
 
 	"github.com/netbirdio/netbird/shared/management/http/api"
 	"github.com/netbirdio/netbird/shared/management/proto"
+	"github.com/netbirdio/netbird/shared/errorpage"
 	"github.com/netbirdio/netbird/shared/schedule"
 )
 
@@ -249,6 +250,8 @@ type Service struct {
 	Restrictions      AccessRestrictions `gorm:"serializer:json"`
 	// Schedule limits when the service is reachable. Nil means always. HTTP only.
 	Schedule          *schedule.Schedule `gorm:"serializer:json"`
+	// ErrorPage replaces the proxy's built-in error page. Nil keeps the default. HTTP only.
+	ErrorPage         *errorpage.Page    `gorm:"serializer:json"`
 	Meta              Meta               `gorm:"embedded;embeddedPrefix:meta_"`
 	SessionPrivateKey string             `gorm:"column:session_private_key"`
 	SessionPublicKey  string             `gorm:"column:session_public_key"`
@@ -360,6 +363,7 @@ func (s *Service) ToAPIResponse() *api.Service {
 		Auth:               authConfig,
 		AccessRestrictions: restrictionsToAPI(s.Restrictions),
 		Schedule:           scheduleToAPI(s.Schedule),
+		ErrorPage:          errorPageToAPI(s.ErrorPage),
 		Meta:               meta,
 		Mode:               &mode,
 		ListenPort:         &listenPort,
@@ -429,6 +433,7 @@ func (s *Service) ToProtoMapping(operation Operation, authToken string, oidcConf
 		mapping.AccessRestrictions = r
 	}
 	mapping.Schedule = scheduleToProto(s.Schedule)
+	mapping.ErrorPage = errorPageToProto(s.ErrorPage)
 
 	return mapping
 }
@@ -727,6 +732,7 @@ func (s *Service) FromAPIRequest(req *api.ServiceRequest, accountID string) erro
 
 	// The request replaces the whole service, so an absent schedule clears it.
 	s.Schedule = scheduleFromAPI(req.Schedule)
+	s.ErrorPage = errorPageFromAPI(req.ErrorPage)
 
 	return nil
 }
@@ -952,6 +958,39 @@ func (s *Service) validateSchedule() error {
 	return s.Schedule.Validate()
 }
 
+func errorPageFromAPI(r *api.ServiceErrorPage) *errorpage.Page {
+	if r == nil {
+		return nil
+	}
+	return &errorpage.Page{HTML: r.Html}
+}
+
+func errorPageToAPI(p *errorpage.Page) *api.ServiceErrorPage {
+	if p == nil {
+		return nil
+	}
+	return &api.ServiceErrorPage{Html: p.HTML}
+}
+
+func errorPageToProto(p *errorpage.Page) *proto.ErrorPage {
+	if p == nil {
+		return nil
+	}
+	return &proto.ErrorPage{Html: p.HTML}
+}
+
+// validateErrorPage rejects an invalid page, and any page on a service whose
+// mode does not serve HTTP error pages.
+func (s *Service) validateErrorPage() error {
+	if s.ErrorPage == nil {
+		return nil
+	}
+	if s.Mode != ModeHTTP {
+		return errors.New("error_page is only supported for HTTP services")
+	}
+	return s.ErrorPage.Validate()
+}
+
 func (s *Service) Validate() error {
 	if s.Name == "" {
 		return errors.New("service name is required")
@@ -975,6 +1014,9 @@ func (s *Service) Validate() error {
 		return err
 	}
 	if err := s.validateSchedule(); err != nil {
+		return err
+	}
+	if err := s.validateErrorPage(); err != nil {
 		return err
 	}
 	if err := s.validatePrivateRequirements(); err != nil {
@@ -1582,6 +1624,7 @@ func (s *Service) Copy() *Service {
 		Auth:              authCopy,
 		Restrictions:      s.Restrictions.Copy(),
 		Schedule:          s.Schedule.Copy(),
+		ErrorPage:         s.ErrorPage.Copy(),
 		Meta:              s.Meta,
 		SessionPrivateKey: s.SessionPrivateKey,
 		SessionPublicKey:  s.SessionPublicKey,
