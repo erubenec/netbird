@@ -2946,6 +2946,8 @@ components:
           $ref: '#/components/schemas/ServiceAuthConfig'
         access_restrictions:
           $ref: '#/components/schemas/AccessRestrictions'
+        schedule:
+          $ref: '#/components/schemas/ServiceSchedule'
         meta:
           $ref: '#/components/schemas/ServiceMeta'
         private:
@@ -3039,6 +3041,8 @@ components:
           $ref: '#/components/schemas/ServiceAuthConfig'
         access_restrictions:
           $ref: '#/components/schemas/AccessRestrictions'
+        schedule:
+          $ref: '#/components/schemas/ServiceSchedule'
         private:
           type: boolean
           description: When true, the service is NetBird-only — its target points at a proxy cluster, inbound peers authenticate via their WireGuard tunnel identity (no OIDC), and an ACL policy is auto-generated from access_groups to the cluster's proxy-peer group. Requires mode=http.
@@ -3221,6 +3225,57 @@ components:
             - "observe"
           default: "off"
           description: CrowdSec IP reputation mode. Only available when the proxy cluster supports CrowdSec.
+    ServiceScheduleWindow:
+      type: object
+      description: A daily time range that repeats on the listed days. A window does not cross midnight; use two windows for that.
+      properties:
+        days:
+          type: array
+          minItems: 1
+          items:
+            type: string
+            enum: [sun, mon, tue, wed, thu, fri, sat]
+          description: Days of the week on which the window applies.
+          example: [mon, tue, wed, thu, fri]
+        start:
+          type: string
+          pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$'
+          description: Start time (inclusive) as HH:MM in the schedule timezone.
+          example: "08:00"
+        end:
+          type: string
+          pattern: '^(([01][0-9]|2[0-3]):[0-5][0-9]|24:00)$'
+          description: End time (exclusive) as HH:MM, or 24:00 for the end of the day, in the schedule timezone.
+          example: "17:00"
+      required:
+        - days
+        - start
+        - end
+    ServiceSchedule:
+      type: object
+      description: Restricts when an HTTP service is reachable. Outside the schedule the proxy serves its service unavailable page. Omit for an always-on service.
+      properties:
+        timezone:
+          type: string
+          description: IANA timezone name in which windows and dates are interpreted.
+          example: "Europe/Madrid"
+        windows:
+          type: array
+          items:
+            $ref: '#/components/schemas/ServiceScheduleWindow'
+          description: Active time ranges. When empty the service is active all day, every day, within the date range.
+        start_date:
+          type: string
+          pattern: '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+          description: First active day as YYYY-MM-DD in the schedule timezone.
+          example: "2026-12-01"
+        end_date:
+          type: string
+          pattern: '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+          description: Last active day (inclusive) as YYYY-MM-DD in the schedule timezone.
+          example: "2026-12-31"
+      required:
+        - timezone
     PasswordAuthConfig:
       type: object
       properties:

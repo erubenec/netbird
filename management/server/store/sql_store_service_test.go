@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	rpservice "github.com/netbirdio/netbird/management/internals/modules/reverseproxy/service"
+	"github.com/netbirdio/netbird/shared/schedule"
 )
 
 func TestSqlStore_GetAccount_PrivateServiceRoundtrip(t *testing.T) {
@@ -133,5 +134,49 @@ func TestSqlStore_GetAccount_ServiceTargetOptionsRoundtrip(t *testing.T) {
 		assert.Equal(t, []string{"application/json"}, tg.Options.CaptureContentTypes, "options capture content types")
 		assert.True(t, tg.Options.AgentNetwork, "options agent network")
 		assert.True(t, tg.Options.DisableAccessLog, "options disable access log")
+	})
+}
+
+// TestSqlStore_GetAccount_ServiceScheduleRoundtrip guards both read paths (gorm
+// and the Postgres pgx loader) against dropping the schedule, which would turn a
+// time-limited service into an always-on one.
+func TestSqlStore_GetAccount_ServiceScheduleRoundtrip(t *testing.T) {
+	if os.Getenv("CI") == "true" && (runtime.GOOS == "darwin" || runtime.GOOS == "windows") {
+		t.Skip("skip CI tests on darwin and windows")
+	}
+
+	runTestForAllEngines(t, "", func(t *testing.T, store Store) {
+		ctx := context.Background()
+		account := newAccountWithId(ctx, "account_schedule_svc", "testuser", "")
+		require.NoError(t, store.SaveAccount(ctx, account))
+
+		want := &schedule.Schedule{
+			Timezone:  "Europe/Madrid",
+			StartDate: "2026-12-01",
+			Windows: []schedule.Window{
+				{Days: []string{"mon", "fri"}, Start: "08:00", End: "17:00"},
+			},
+		}
+		scheduled := &rpservice.Service{
+			ID: "svc-scheduled", AccountID: account.Id, Name: "scheduled", Domain: "scheduled.example",
+			ProxyCluster: "cluster.example", Enabled: true, Mode: rpservice.ModeHTTP, Schedule: want,
+		}
+		plain := &rpservice.Service{
+			ID: "svc-plain", AccountID: account.Id, Name: "plain", Domain: "plain.example",
+			ProxyCluster: "cluster.example", Enabled: true, Mode: rpservice.ModeHTTP,
+		}
+		require.NoError(t, store.CreateService(ctx, scheduled))
+		require.NoError(t, store.CreateService(ctx, plain))
+
+		loaded, err := store.GetAccount(ctx, account.Id)
+		require.NoError(t, err)
+		require.Len(t, loaded.Services, 2)
+
+		byID := map[string]*rpservice.Service{}
+		for _, s := range loaded.Services {
+			byID[s.ID] = s
+		}
+		assert.Equal(t, want, byID["svc-scheduled"].Schedule)
+		assert.Nil(t, byID["svc-plain"].Schedule, "a service without a schedule must stay always-on")
 	})
 }

@@ -24,6 +24,7 @@ import (
 
 	"github.com/netbirdio/netbird/shared/management/http/api"
 	"github.com/netbirdio/netbird/shared/management/proto"
+	"github.com/netbirdio/netbird/shared/schedule"
 )
 
 type Operation string
@@ -246,6 +247,8 @@ type Service struct {
 	RewriteRedirects  bool
 	Auth              AuthConfig         `gorm:"serializer:json"`
 	Restrictions      AccessRestrictions `gorm:"serializer:json"`
+	// Schedule limits when the service is reachable. Nil means always. HTTP only.
+	Schedule          *schedule.Schedule `gorm:"serializer:json"`
 	Meta              Meta               `gorm:"embedded;embeddedPrefix:meta_"`
 	SessionPrivateKey string             `gorm:"column:session_private_key"`
 	SessionPublicKey  string             `gorm:"column:session_public_key"`
@@ -356,6 +359,7 @@ func (s *Service) ToAPIResponse() *api.Service {
 		RewriteRedirects:   &s.RewriteRedirects,
 		Auth:               authConfig,
 		AccessRestrictions: restrictionsToAPI(s.Restrictions),
+		Schedule:           scheduleToAPI(s.Schedule),
 		Meta:               meta,
 		Mode:               &mode,
 		ListenPort:         &listenPort,
@@ -424,6 +428,7 @@ func (s *Service) ToProtoMapping(operation Operation, authToken string, oidcConf
 	if r := restrictionsToProto(s.Restrictions); r != nil {
 		mapping.AccessRestrictions = r
 	}
+	mapping.Schedule = scheduleToProto(s.Schedule)
 
 	return mapping
 }
@@ -720,6 +725,9 @@ func (s *Service) FromAPIRequest(req *api.ServiceRequest, accountID string) erro
 		s.Restrictions = restrictions
 	}
 
+	// The request replaces the whole service, so an absent schedule clears it.
+	s.Schedule = scheduleFromAPI(req.Schedule)
+
 	return nil
 }
 
@@ -865,6 +873,85 @@ func restrictionsToProto(r AccessRestrictions) *proto.AccessRestrictions {
 	}
 }
 
+func scheduleFromAPI(r *api.ServiceSchedule) *schedule.Schedule {
+	if r == nil {
+		return nil
+	}
+	out := &schedule.Schedule{Timezone: r.Timezone}
+	if r.StartDate != nil {
+		out.StartDate = *r.StartDate
+	}
+	if r.EndDate != nil {
+		out.EndDate = *r.EndDate
+	}
+	if r.Windows != nil {
+		for _, w := range *r.Windows {
+			days := make([]string, 0, len(w.Days))
+			for _, d := range w.Days {
+				days = append(days, string(d))
+			}
+			out.Windows = append(out.Windows, schedule.Window{Days: days, Start: w.Start, End: w.End})
+		}
+	}
+	return out
+}
+
+func scheduleToAPI(s *schedule.Schedule) *api.ServiceSchedule {
+	if s == nil {
+		return nil
+	}
+	out := &api.ServiceSchedule{Timezone: s.Timezone}
+	if s.StartDate != "" {
+		out.StartDate = &s.StartDate
+	}
+	if s.EndDate != "" {
+		out.EndDate = &s.EndDate
+	}
+	if len(s.Windows) > 0 {
+		windows := make([]api.ServiceScheduleWindow, 0, len(s.Windows))
+		for _, w := range s.Windows {
+			days := make([]api.ServiceScheduleWindowDays, 0, len(w.Days))
+			for _, d := range w.Days {
+				days = append(days, api.ServiceScheduleWindowDays(strings.ToLower(d)))
+			}
+			windows = append(windows, api.ServiceScheduleWindow{Days: days, Start: w.Start, End: w.End})
+		}
+		out.Windows = &windows
+	}
+	return out
+}
+
+func scheduleToProto(s *schedule.Schedule) *proto.Schedule {
+	if s == nil {
+		return nil
+	}
+	out := &proto.Schedule{
+		Timezone:  s.Timezone,
+		StartDate: s.StartDate,
+		EndDate:   s.EndDate,
+	}
+	for _, w := range s.Windows {
+		days := make([]string, 0, len(w.Days))
+		for _, d := range w.Days {
+			days = append(days, strings.ToLower(d))
+		}
+		out.Windows = append(out.Windows, &proto.ScheduleWindow{Days: days, Start: w.Start, End: w.End})
+	}
+	return out
+}
+
+// validateSchedule rejects an invalid schedule, and any schedule on a service
+// whose mode the proxy cannot gate by time.
+func (s *Service) validateSchedule() error {
+	if s.Schedule == nil {
+		return nil
+	}
+	if s.Mode != ModeHTTP {
+		return errors.New("schedule is only supported for HTTP services")
+	}
+	return s.Schedule.Validate()
+}
+
 func (s *Service) Validate() error {
 	if s.Name == "" {
 		return errors.New("service name is required")
@@ -885,6 +972,9 @@ func (s *Service) Validate() error {
 		return err
 	}
 	if err := validateAccessRestrictions(&s.Restrictions); err != nil {
+		return err
+	}
+	if err := s.validateSchedule(); err != nil {
 		return err
 	}
 	if err := s.validatePrivateRequirements(); err != nil {
@@ -1491,6 +1581,7 @@ func (s *Service) Copy() *Service {
 		RewriteRedirects:  s.RewriteRedirects,
 		Auth:              authCopy,
 		Restrictions:      s.Restrictions.Copy(),
+		Schedule:          s.Schedule.Copy(),
 		Meta:              s.Meta,
 		SessionPrivateKey: s.SessionPrivateKey,
 		SessionPublicKey:  s.SessionPublicKey,

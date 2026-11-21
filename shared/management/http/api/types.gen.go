@@ -1061,6 +1061,39 @@ func (e ServiceRequestMode) Valid() bool {
 	}
 }
 
+// Defines values for ServiceScheduleWindowDays.
+const (
+	ServiceScheduleWindowDaysFri ServiceScheduleWindowDays = "fri"
+	ServiceScheduleWindowDaysMon ServiceScheduleWindowDays = "mon"
+	ServiceScheduleWindowDaysSat ServiceScheduleWindowDays = "sat"
+	ServiceScheduleWindowDaysSun ServiceScheduleWindowDays = "sun"
+	ServiceScheduleWindowDaysThu ServiceScheduleWindowDays = "thu"
+	ServiceScheduleWindowDaysTue ServiceScheduleWindowDays = "tue"
+	ServiceScheduleWindowDaysWed ServiceScheduleWindowDays = "wed"
+)
+
+// Valid indicates whether the value is a known member of the ServiceScheduleWindowDays enum.
+func (e ServiceScheduleWindowDays) Valid() bool {
+	switch e {
+	case ServiceScheduleWindowDaysFri:
+		return true
+	case ServiceScheduleWindowDaysMon:
+		return true
+	case ServiceScheduleWindowDaysSat:
+		return true
+	case ServiceScheduleWindowDaysSun:
+		return true
+	case ServiceScheduleWindowDaysThu:
+		return true
+	case ServiceScheduleWindowDaysTue:
+		return true
+	case ServiceScheduleWindowDaysWed:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ServiceTargetAccessAction.
 const (
 	ServiceTargetAccessActionBlock   ServiceTargetAccessAction = "block"
@@ -5196,6 +5229,9 @@ type Service struct {
 	// RewriteRedirects When true, Location headers in backend responses are rewritten to replace the backend address with the public-facing domain
 	RewriteRedirects *bool `json:"rewrite_redirects,omitempty"`
 
+	// Schedule Restricts when an HTTP service is reachable. Outside the schedule the proxy serves its service unavailable page. Omit for an always-on service.
+	Schedule *ServiceSchedule `json:"schedule,omitempty"`
+
 	// Targets List of target backends for this service
 	Targets []ServiceTarget `json:"targets"`
 
@@ -5263,12 +5299,45 @@ type ServiceRequest struct {
 	// RewriteRedirects When true, Location headers in backend responses are rewritten to replace the backend address with the public-facing domain
 	RewriteRedirects *bool `json:"rewrite_redirects,omitempty"`
 
+	// Schedule Restricts when an HTTP service is reachable. Outside the schedule the proxy serves its service unavailable page. Omit for an always-on service.
+	Schedule *ServiceSchedule `json:"schedule,omitempty"`
+
 	// Targets List of target backends for this service
 	Targets *[]ServiceTarget `json:"targets,omitempty"`
 }
 
 // ServiceRequestMode Service mode. "http" for L7 reverse proxy, "tcp"/"udp"/"tls" for L4 passthrough.
 type ServiceRequestMode string
+
+// ServiceSchedule Restricts when an HTTP service is reachable. Outside the schedule the proxy serves its service unavailable page. Omit for an always-on service.
+type ServiceSchedule struct {
+	// EndDate Last active day (inclusive) as YYYY-MM-DD in the schedule timezone.
+	EndDate *string `json:"end_date,omitempty"`
+
+	// StartDate First active day as YYYY-MM-DD in the schedule timezone.
+	StartDate *string `json:"start_date,omitempty"`
+
+	// Timezone IANA timezone name in which windows and dates are interpreted.
+	Timezone string `json:"timezone"`
+
+	// Windows Active time ranges. When empty the service is active all day, every day, within the date range.
+	Windows *[]ServiceScheduleWindow `json:"windows,omitempty"`
+}
+
+// ServiceScheduleWindow A daily time range that repeats on the listed days. A window does not cross midnight; use two windows for that.
+type ServiceScheduleWindow struct {
+	// Days Days of the week on which the window applies.
+	Days []ServiceScheduleWindowDays `json:"days"`
+
+	// End End time (exclusive) as HH:MM, or 24:00 for the end of the day, in the schedule timezone.
+	End string `json:"end"`
+
+	// Start Start time (inclusive) as HH:MM in the schedule timezone.
+	Start string `json:"start"`
+}
+
+// ServiceScheduleWindowDays defines model for ServiceScheduleWindow.Days.
+type ServiceScheduleWindowDays string
 
 // ServiceTarget defines model for ServiceTarget.
 type ServiceTarget struct {
