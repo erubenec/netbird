@@ -23,6 +23,7 @@ import (
 	"github.com/netbirdio/netbird/proxy/internal/types"
 	"github.com/netbirdio/netbird/proxy/web"
 	"github.com/netbirdio/netbird/shared/management/proto"
+	"github.com/netbirdio/netbird/shared/errorpage"
 	"github.com/netbirdio/netbird/shared/schedule"
 )
 
@@ -60,6 +61,8 @@ type DomainConfig struct {
 	IPRestrictions    *restrict.Filter
 	// Schedule gates the domain by time of day. Nil means always reachable.
 	Schedule *schedule.Schedule
+	// ErrorPage replaces the built-in error pages for this domain. Nil keeps them.
+	ErrorPage *errorpage.Page
 	// Private routes the domain through ValidateTunnelPeer; failure → 403.
 	Private bool
 	// AllowedGroups holds the group ids that may reach the service through an
@@ -144,6 +147,9 @@ func (mw *Middleware) Protect(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+
+		// Every error page rendered below this point can be the service's own.
+		r = r.WithContext(web.WithErrorPage(r.Context(), config.ErrorPage))
 
 		// enforce account id for requests routed through the embedded client
 		capturedData := proxy.CapturedDataFromContext(r.Context())

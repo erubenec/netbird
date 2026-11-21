@@ -151,6 +151,10 @@ type ErrorStatus struct {
 
 // ServeErrorPage renders a user-friendly error page with the given details.
 func ServeErrorPage(w http.ResponseWriter, r *http.Request, code int, title, message, requestID string, status ErrorStatus) {
+	if page := errorPageFrom(r.Context()); page != nil {
+		serveCustomErrorPage(w, page, code, title, message, requestID)
+		return
+	}
 	ServeHTTP(w, r, map[string]any{
 		"page": "error",
 		"error": map[string]any{

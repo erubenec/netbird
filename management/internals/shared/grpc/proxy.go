@@ -1283,6 +1283,7 @@ func shallowCloneMapping(m *proto.ProxyMapping) *proto.ProxyMapping {
 		AccessRestrictions: m.AccessRestrictions,
 		Private:            m.Private,
 		Schedule:           m.Schedule,
+		ErrorPage:          m.ErrorPage,
 	}
 }
 

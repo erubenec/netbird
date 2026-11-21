@@ -242,6 +242,13 @@ message Schedule {
   string end_date = 4;
 }
 
+// ErrorPage replaces the proxy's built-in error page for a service.
+message ErrorPage {
+  // A complete HTML document. {{status}}, {{title}}, {{message}} and
+  // {{request_id}} are replaced with HTML-escaped values.
+  string html = 1;
+}
+
 message ProxyMapping {
   ProxyMappingUpdateType type = 1;
   string id = 2;
@@ -265,6 +272,8 @@ message ProxyMapping {
   bool private = 13;
   // When set, the service is only reachable inside the schedule. HTTP services only.
   Schedule schedule = 14;
+  // When set, replaces the proxy's error pages for this service. HTTP services only.
+  ErrorPage error_page = 15;
 }
 
 // SendAccessLogRequest consists of one or more AccessLogs from a Proxy.
