@@ -1,0 +1,3 @@
+# Branches of this fork merged on top of upstream main, one per line.
+# The fork carries every upstream branch too, so only list your own.
+feat/service-schedule

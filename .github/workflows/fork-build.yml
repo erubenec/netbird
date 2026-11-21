@@ -2,7 +2,7 @@
 # and publishes them to ghcr.io.
 #
 # Nothing is written back to the repository. The runner merges
-# upstream/main with every origin/feat/* branch in a throwaway branch, so
+# upstream/main with the branches listed in features.txt in a throwaway branch, so
 # upstream changes to .github/workflows never need workflow permissions and
 # this default branch stays a tiny, conflict-free `fork-ci` branch.
 name: fork build
@@ -50,12 +50,22 @@ jobs:
           git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
           git fetch --no-tags upstream main
 
+          # The fork also carries every upstream branch, so features are listed
+          # explicitly in features.txt instead of matched by name. Read it
+          # before switching to the build branch, where it does not exist.
+          features=$(grep -vE '^[[:space:]]*(#|$)' features.txt || true)
+
           up=$(git rev-parse upstream/main)
           git checkout -q -B build "$up"
           fingerprint_input="$up"
           merged=""
 
-          for ref in $(git for-each-ref --format='%(refname:short)' 'refs/remotes/origin/feat/*' | sort); do
+          for name in $features; do
+            ref="origin/$name"
+            if ! git rev-parse --verify -q "refs/remotes/$ref" > /dev/null; then
+              echo "::error::features.txt lists $name but $ref does not exist in the fork."
+              exit 1
+            fi
             echo "Merging $ref"
             if ! git merge --no-edit --no-ff "$ref"; then
               git merge --abort || true
