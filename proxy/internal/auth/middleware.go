@@ -23,6 +23,7 @@ import (
 	"github.com/netbirdio/netbird/proxy/internal/types"
 	"github.com/netbirdio/netbird/proxy/web"
 	"github.com/netbirdio/netbird/shared/management/proto"
+	"github.com/netbirdio/netbird/shared/schedule"
 )
 
 // errValidationUnavailable indicates that session validation failed due to
@@ -57,6 +58,8 @@ type DomainConfig struct {
 	AccountID         types.AccountID
 	ServiceID         types.ServiceID
 	IPRestrictions    *restrict.Filter
+	// Schedule gates the domain by time of day. Nil means always reachable.
+	Schedule *schedule.Schedule
 	// Private routes the domain through ValidateTunnelPeer; failure → 403.
 	Private bool
 	// AllowedGroups holds the group ids that may reach the service through an
@@ -106,6 +109,8 @@ type Middleware struct {
 	geo              restrict.GeoResolver
 	tunnelCache      *tunnelValidationCache
 	credentials      *credentialLimiter
+	// now overrides the clock in tests.
+	now func() time.Time
 }
 
 // NewMiddleware creates a new authentication middleware. The sessionValidator is
@@ -150,6 +155,10 @@ func (mw *Middleware) Protect(next http.Handler) http.Handler {
 		setCapturedIDs(r, config)
 
 		if !mw.checkIPRestrictions(w, r, config) {
+			return
+		}
+
+		if !mw.checkSchedule(w, r, config) {
 			return
 		}
 

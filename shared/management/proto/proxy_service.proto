@@ -218,6 +218,30 @@ message AccessRestrictions {
   string crowdsec_mode = 5;
 }
 
+// ScheduleWindow is a daily time range repeated on the listed days.
+message ScheduleWindow {
+  // Lowercase three-letter day names: sun, mon, tue, wed, thu, fri, sat.
+  repeated string days = 1;
+  // "HH:MM", inclusive, in the schedule timezone.
+  string start = 2;
+  // "HH:MM" or "24:00", exclusive, in the schedule timezone.
+  string end = 3;
+}
+
+// Schedule restricts when a service is reachable. The proxy serves the
+// service-unavailable page outside the schedule and fails closed when it
+// cannot evaluate it.
+message Schedule {
+  // IANA timezone name, for example "Europe/Madrid".
+  string timezone = 1;
+  // Empty means active all day, every day, within the date range.
+  repeated ScheduleWindow windows = 2;
+  // First active day, "YYYY-MM-DD" in the schedule timezone. Empty means unbounded.
+  string start_date = 3;
+  // Last active day (inclusive), "YYYY-MM-DD". Empty means unbounded.
+  string end_date = 4;
+}
+
 message ProxyMapping {
   ProxyMappingUpdateType type = 1;
   string id = 2;
@@ -239,6 +263,8 @@ message ProxyMapping {
   AccessRestrictions access_restrictions = 12;
   // NetBird-only: the proxy MUST call ValidateTunnelPeer and fail closed; operator auth schemes are bypassed.
   bool private = 13;
+  // When set, the service is only reachable inside the schedule. HTTP services only.
+  Schedule schedule = 14;
 }
 
 // SendAccessLogRequest consists of one or more AccessLogs from a Proxy.
