@@ -1,10 +1,14 @@
 # Builds NetBird images from upstream main plus this fork's feature branches
-# and publishes them to ghcr.io.
+# and publishes multi-arch images (amd64 and arm64) to ghcr.io.
 #
-# Nothing is written back to the repository. The runner merges
-# upstream/main with the branches listed in features.txt in a throwaway branch, so
-# upstream changes to .github/workflows never need workflow permissions and
-# this default branch stays a tiny, conflict-free `fork-ci` branch.
+# Nothing is written back to the repository. Each job merges upstream/main
+# with the branches listed in features.txt in a throwaway branch (see
+# scripts/compose.sh), so upstream changes to .github/workflows never need
+# workflow permissions and this default branch stays a tiny `fork-ci` branch.
+#
+# Each architecture is built natively on its own runner, because the Go
+# builds use CGO and would be very slow under QEMU. The per-architecture
+# images are pushed by digest and joined into one tag in the merge job.
 name: fork build
 
 on:
@@ -29,11 +33,20 @@ permissions:
 
 env:
   UPSTREAM_REPO: netbirdio/netbird
+  # Part of the build fingerprint: bump it to rebuild when the way images are
+  # built changes without upstream or the features changing.
+  BUILD_REV: platforms=linux/amd64,linux/arm64
 
 jobs:
-  build:
+  prepare:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 15
+    outputs:
+      fp: ${{ steps.compose.outputs.fp }}
+      up7: ${{ steps.compose.outputs.up7 }}
+      date: ${{ steps.compose.outputs.date }}
+      prefix: ${{ steps.compose.outputs.prefix }}
+      build: ${{ steps.decide.outputs.build }}
     steps:
       - name: Check out the fork with all branches
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -44,50 +57,8 @@ jobs:
       - name: Compose upstream main with the feature branches
         id: compose
         run: |
-          set -euo pipefail
-          git config user.name "fork-ci"
-          git config user.email "fork-ci@users.noreply.github.com"
-          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
-          git fetch --no-tags upstream main
-
-          # The fork also carries every upstream branch, so features are listed
-          # explicitly in features.txt instead of matched by name. Read it
-          # before switching to the build branch, where it does not exist.
-          features=$(grep -vE '^[[:space:]]*(#|$)' features.txt || true)
-
-          up=$(git rev-parse upstream/main)
-          git checkout -q -B build "$up"
-          fingerprint_input="$up"
-          merged=""
-
-          for name in $features; do
-            ref="origin/$name"
-            if ! git rev-parse --verify -q "refs/remotes/$ref" > /dev/null; then
-              echo "::error::features.txt lists $name but $ref does not exist in the fork."
-              exit 1
-            fi
-            echo "Merging $ref"
-            if ! git merge --no-edit --no-ff "$ref"; then
-              git merge --abort || true
-              echo "::error::Conflict merging $ref into upstream/main ($up). Rebase that branch on upstream and push it again."
-              exit 1
-            fi
-            fingerprint_input="$fingerprint_input $(git rev-parse "$ref")"
-            merged="$merged $ref"
-          done
-
-          owner=$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
-          {
-            echo "fp=$(echo "$fingerprint_input" | sha256sum | cut -c1-12)"
-            echo "up7=${up:0:7}"
-            echo "date=$(date -u +%Y%m%d)"
-            echo "prefix=ghcr.io/${owner}"
-          } >> "$GITHUB_OUTPUT"
-          {
-            echo "### Composed tree"
-            echo "- upstream/main: \`$up\`"
-            echo "- features:${merged:- none}"
-          } >> "$GITHUB_STEP_SUMMARY"
+          cp scripts/compose.sh "$RUNNER_TEMP/compose.sh"
+          bash "$RUNNER_TEMP/compose.sh"
 
       - name: Log in to the GitHub Container Registry
         uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4
@@ -96,50 +67,128 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Skip when this exact combination is already published
-        id: check
+      - name: Decide whether anything needs building
+        id: decide
+        env:
+          PREFIX: ${{ steps.compose.outputs.prefix }}
+          FP: ${{ steps.compose.outputs.fp }}
+          FORCE: ${{ github.event.inputs.force }}
         run: |
-          if docker buildx imagetools inspect "${{ steps.compose.outputs.prefix }}/netbird-server:src-${{ steps.compose.outputs.fp }}" > /dev/null 2>&1; then
-            echo "built=true" >> "$GITHUB_OUTPUT"
+          if [ "$FORCE" != "true" ] && docker buildx imagetools inspect "$PREFIX/netbird-server:src-$FP" > /dev/null 2>&1; then
+            echo "build=false" >> "$GITHUB_OUTPUT"
             echo "Already built for this upstream and features combination; nothing to do."
           else
-            echo "built=false" >> "$GITHUB_OUTPUT"
+            echo "build=true" >> "$GITHUB_OUTPUT"
           fi
 
+  build:
+    needs: prepare
+    if: needs.prepare.outputs.build == 'true'
+    name: build ${{ matrix.image }} ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { image: server, file: combined/Dockerfile.multistage, arch: amd64, runner: ubuntu-latest }
+          - { image: server, file: combined/Dockerfile.multistage, arch: arm64, runner: ubuntu-24.04-arm }
+          - { image: proxy, file: proxy/Dockerfile.multistage, arch: amd64, runner: ubuntu-latest }
+          - { image: proxy, file: proxy/Dockerfile.multistage, arch: arm64, runner: ubuntu-24.04-arm }
+    steps:
+      - name: Check out the fork with all branches
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Compose upstream main with the feature branches
+        id: compose
+        run: |
+          cp scripts/compose.sh "$RUNNER_TEMP/compose.sh"
+          bash "$RUNNER_TEMP/compose.sh"
+
+      - name: Log in to the GitHub Container Registry
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Set up Docker Buildx
-        if: steps.check.outputs.built != 'true' || github.event.inputs.force == 'true'
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
 
-      - name: Build and push the combined server image
-        if: steps.check.outputs.built != 'true' || github.event.inputs.force == 'true'
+      - name: Build and push by digest
+        id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
           context: .
-          file: combined/Dockerfile.multistage
-          platforms: linux/amd64
-          push: true
+          file: ${{ matrix.file }}
+          platforms: linux/${{ matrix.arch }}
+          provenance: false
+          sbom: false
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
-          tags: |
-            ${{ steps.compose.outputs.prefix }}/netbird-server:latest
-            ${{ steps.compose.outputs.prefix }}/netbird-server:src-${{ steps.compose.outputs.fp }}
-            ${{ steps.compose.outputs.prefix }}/netbird-server:${{ steps.compose.outputs.date }}-up${{ steps.compose.outputs.up7 }}
-          cache-from: type=gha,scope=server
-          cache-to: type=gha,mode=max,scope=server
+          outputs: type=image,name=${{ needs.prepare.outputs.prefix }}/netbird-${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.image }}-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}-${{ matrix.arch }}
 
-      - name: Build and push the proxy image
-        if: steps.check.outputs.built != 'true' || github.event.inputs.force == 'true'
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+      - name: Export the digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/digests"
+          touch "$RUNNER_TEMP/digests/${DIGEST#sha256:}"
+
+      - name: Upload the digest
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          context: .
-          file: proxy/Dockerfile.multistage
-          platforms: linux/amd64
-          push: true
-          labels: |
-            org.opencontainers.image.source=https://github.com/${{ github.repository }}
-          tags: |
-            ${{ steps.compose.outputs.prefix }}/netbird-proxy:latest
-            ${{ steps.compose.outputs.prefix }}/netbird-proxy:src-${{ steps.compose.outputs.fp }}
-            ${{ steps.compose.outputs.prefix }}/netbird-proxy:${{ steps.compose.outputs.date }}-up${{ steps.compose.outputs.up7 }}
-          cache-from: type=gha,scope=proxy
-          cache-to: type=gha,mode=max,scope=proxy
+          name: digests-${{ matrix.image }}-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    needs: [prepare, build]
+    name: publish ${{ matrix.image }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [server, proxy]
+    steps:
+      - name: Download the digests
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digests-${{ matrix.image }}-*
+          merge-multiple: true
+
+      - name: Log in to the GitHub Container Registry
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+
+      - name: Create the multi-arch tags
+        working-directory: ${{ runner.temp }}/digests
+        env:
+          IMAGE: ${{ needs.prepare.outputs.prefix }}/netbird-${{ matrix.image }}
+          FP: ${{ needs.prepare.outputs.fp }}
+          STAMP: ${{ needs.prepare.outputs.date }}-up${{ needs.prepare.outputs.up7 }}
+        run: |
+          # shellcheck disable=SC2046
+          docker buildx imagetools create \
+            -t "$IMAGE:latest" -t "$IMAGE:src-$FP" -t "$IMAGE:$STAMP" \
+            $(printf "$IMAGE@sha256:%s " *)
+
+      - name: Show the result
+        env:
+          IMAGE: ${{ needs.prepare.outputs.prefix }}/netbird-${{ matrix.image }}
+          FP: ${{ needs.prepare.outputs.fp }}
+        run: docker buildx imagetools inspect "$IMAGE:src-$FP"
